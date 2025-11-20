@@ -1,0 +1,72 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Compiled Go binary
+secure-fm
+main
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+
+# Dependency directories (optional - some prefer to commit go.sum)
+vendor/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment variables (содержит чувствительные данные)
+.env.local
+.env.*.local
+
+# Docker volumes and data
+sandbox_data/
+postgres_data/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS generated files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Debug files
+debug
+__debug_bin
+
+# Air live reload (если используется)
+tmp/
+.air.toml
+
+# Database files (если используется SQLite для тестов)
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup

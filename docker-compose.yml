@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    container_name: secure-fm-app
+    depends_on:
+      - db
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=secret
+      - DB_NAME=securefm
+      - SANDBOX_PATH=/app/sandbox
+    volumes:
+      - ./sandbox_data:/app/sandbox
+    stdin_open: true # For interactive CLI
+    tty: true # For interactive CLI
+
+  db:
+    image: postgres:15-alpine
+    container_name: secure-fm-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=secret
+      - POSTGRES_DB=securefm
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
