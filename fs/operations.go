@@ -165,3 +165,35 @@ func MoveFile(src, dst string) error {
 
 	return os.Rename(safeSrc, safeDst)
 }
+
+// AppendFile добавляет содержимое в конец существующего файла
+func AppendFile(path string, content string) error {
+	safePath, err := ResolvePath(path)
+	if err != nil {
+		return err
+	}
+
+	// Проверяем текущий размер файла + новый контент
+	fileMutex.RLock()
+	info, err := os.Stat(safePath)
+	fileMutex.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	if info.Size()+int64(len(content)) > int64(MaxFileSize) {
+		return errors.New("итоговый размер файла превысит максимально допустимый (10 MB)")
+	}
+
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	file, err := os.OpenFile(safePath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(content)
+	return err
+}
