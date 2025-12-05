@@ -4,15 +4,18 @@ import (
 	"time"
 )
 
+// FileMetadata — структура метаданных файла
 type FileMetadata struct {
-	ID        int
-	Filename  string
-	CreatedAt time.Time
-	Size      int64
-	Location  string
-	OwnerID   int
+	ID        int       // Уникальный идентификатор
+	Filename  string    // Имя файла
+	CreatedAt time.Time // Дата создания
+	Size      int64     // Размер в байтах
+	Location  string    // Путь к файлу
+	OwnerID   int       // ID владельца (FK на users)
 }
 
+// CreateFileMetadata создаёт запись о файле в БД
+// Использует Prepared Statement для защиты от SQL-инъекций
 func CreateFileMetadata(filename string, size int64, location string, ownerID int) (int, error) {
 	stmt, err := DB.Prepare("INSERT INTO files(filename, size, location, owner_id) VALUES($1, $2, $3, $4) RETURNING id")
 	if err != nil {
@@ -25,6 +28,7 @@ func CreateFileMetadata(filename string, size int64, location string, ownerID in
 	return id, err
 }
 
+// GetFileMetadata получает метаданные файла по ID
 func GetFileMetadata(id int) (*FileMetadata, error) {
 	stmt, err := DB.Prepare("SELECT id, filename, created_at, size, location, owner_id FROM files WHERE id = $1")
 	if err != nil {
@@ -40,6 +44,7 @@ func GetFileMetadata(id int) (*FileMetadata, error) {
 	return &f, nil
 }
 
+// GetFilesByUser получает все файлы пользователя
 func GetFilesByUser(userID int) ([]FileMetadata, error) {
 	stmt, err := DB.Prepare("SELECT id, filename, created_at, size, location, owner_id FROM files WHERE owner_id = $1")
 	if err != nil {
@@ -64,6 +69,7 @@ func GetFilesByUser(userID int) ([]FileMetadata, error) {
 	return files, nil
 }
 
+// DeleteFileMetadata удаляет запись о файле из БД
 func DeleteFileMetadata(id int) error {
 	stmt, err := DB.Prepare("DELETE FROM files WHERE id = $1")
 	if err != nil {

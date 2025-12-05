@@ -70,3 +70,6 @@ tmp/
 # Backup files
 *.bak
 *.backup
+
+theory.md
+ARCHITECTURE.md

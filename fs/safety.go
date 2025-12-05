@@ -7,32 +7,34 @@ import (
 	"strings"
 )
 
+// BaseDir — базовая директория sandbox, относительно которой работают все операции
 var BaseDir string
 
+// MaxFileSize — максимальный размер файла для записи (10 MB)
+// Защита от DoS-атаки через загрузку больших файлов
+const MaxFileSize = 10 * 1024 * 1024 // 10 MB
+
+// InitFS инициализирует файловую систему, устанавливая путь к sandbox
 func InitFS(cfg *config.Config) {
 	BaseDir = cfg.SandboxPath
-	// Ensure BaseDir is absolute
+	// Преобразуем путь в абсолютный для надёжности
 	abs, err := filepath.Abs(BaseDir)
 	if err == nil {
 		BaseDir = abs
 	}
 }
 
-// ResolvePath ensures the path is within the sandbox
+// ResolvePath проверяет и преобразует пользовательский путь в безопасный
+// Защита от атаки Path Traversal (обход пути)
 func ResolvePath(userPath string) (string, error) {
-	// Clean the path to remove .. and .
-	// cleanedPath := filepath.Clean(userPath) // Unused
-
-	// If it's a relative path, join it with BaseDir
-	// But we need to be careful. If user provides "../something", Join might keep it relative if we are not careful.
-	// Best strategy: Join BaseDir + userPath, then Clean, then check prefix.
-
+	// Объединяем базовый путь и пользовательский путь
 	fullPath := filepath.Join(BaseDir, userPath)
+	// Очищаем путь от "." и ".."
 	cleanedFullPath := filepath.Clean(fullPath)
 
-	// Check if it starts with BaseDir
+	// Проверяем, что результат находится внутри sandbox
 	if !strings.HasPrefix(cleanedFullPath, BaseDir) {
-		return "", errors.New("access denied: path traversal attempt")
+		return "", errors.New("доступ запрещён: попытка обхода пути (path traversal)")
 	}
 
 	return cleanedFullPath, nil

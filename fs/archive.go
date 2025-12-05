@@ -11,10 +11,13 @@ import (
 )
 
 const (
-	MaxDecompressedSize = 100 * 1024 * 1024 // 100 MB Limit
-	MaxCompressionRatio = 100               // 100:1 Ratio Limit
+	// MaxDecompressedSize — максимальный размер распакованных данных (защита от ZIP-бомб)
+	MaxDecompressedSize = 100 * 1024 * 1024 // 100 MB
+	// MaxCompressionRatio — максимальная степень сжатия (защита от ZIP-бомб)
+	MaxCompressionRatio = 100 // 100:1
 )
 
+// CreateZip создаёт ZIP-архив из файла или директории
 func CreateZip(source, target string) error {
 	safeSource, err := ResolvePath(source)
 	if err != nil {
@@ -44,6 +47,7 @@ func CreateZip(source, target string) error {
 		baseDir = filepath.Base(safeSource)
 	}
 
+	// Обходим все файлы и добавляем их в архив
 	filepath.Walk(safeSource, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -61,7 +65,7 @@ func CreateZip(source, target string) error {
 		if info.IsDir() {
 			header.Name += "/"
 		} else {
-			header.Method = zip.Deflate
+			header.Method = zip.Deflate // Используем сжатие Deflate
 		}
 
 		writer, err := archive.CreateHeader(header)
@@ -85,6 +89,7 @@ func CreateZip(source, target string) error {
 	return err
 }
 
+// Unzip распаковывает ZIP-архив с защитой от ZIP-бомб и Zip Slip
 func Unzip(src, dest string) error {
 	safeSrc, err := ResolvePath(src)
 	if err != nil {
@@ -104,22 +109,22 @@ func Unzip(src, dest string) error {
 	var totalSize int64
 
 	for _, f := range r.File {
-		// Zip Bomb Protection 1: Check Ratio
+		// Защита от ZIP-бомб #1: проверка степени сжатия
 		if f.UncompressedSize64 > 0 && float64(f.UncompressedSize64)/float64(f.CompressedSize64) > MaxCompressionRatio {
-			return fmt.Errorf("zip bomb detected: compression ratio too high for %s", f.Name)
+			return fmt.Errorf("обнаружена ZIP-бомба: слишком высокая степень сжатия для %s", f.Name)
 		}
 
-		// Zip Bomb Protection 2: Check Total Size
+		// Защита от ZIP-бомб #2: проверка общего размера
 		totalSize += int64(f.UncompressedSize64)
 		if totalSize > MaxDecompressedSize {
-			return errors.New("zip bomb detected: total decompressed size exceeds limit")
+			return errors.New("обнаружена ZIP-бомба: превышен лимит размера распакованных данных")
 		}
 
 		fpath := filepath.Join(safeDest, f.Name)
 
-		// Check for Zip Slip (Path Traversal inside Zip)
+		// Защита от Zip Slip (Path Traversal внутри архива)
 		if !strings.HasPrefix(fpath, filepath.Clean(safeDest)+string(os.PathSeparator)) {
-			return fmt.Errorf("illegal file path: %s", fpath)
+			return fmt.Errorf("недопустимый путь файла: %s", fpath)
 		}
 
 		if f.FileInfo().IsDir() {
@@ -142,7 +147,7 @@ func Unzip(src, dest string) error {
 			return err
 		}
 
-		// Limit reader to prevent infinite stream
+		// Ограничиваем чтение для предотвращения бесконечного потока
 		limitReader := io.LimitReader(rc, MaxDecompressedSize)
 		_, err = io.Copy(outFile, limitReader)
 

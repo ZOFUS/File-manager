@@ -6,9 +6,11 @@ import (
 	"os"
 )
 
-// Generic map for JSON/XML to allow flexibility
+// DataContainer — универсальный контейнер для JSON/XML данных
 type DataContainer map[string]interface{}
 
+// ReadJSON читает и десериализует JSON файл
+// Go's json decoder безопасен от выполнения произвольного кода
 func ReadJSON(path string) (interface{}, error) {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -26,11 +28,11 @@ func ReadJSON(path string) (interface{}, error) {
 
 	var data interface{}
 	decoder := json.NewDecoder(file)
-	// Go's json decoder is safe from code execution, but we can add limits if needed
 	err = decoder.Decode(&data)
 	return data, err
 }
 
+// WriteJSON сериализует данные и записывает в JSON файл
 func WriteJSON(path string, data interface{}) error {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -47,16 +49,17 @@ func WriteJSON(path string, data interface{}) error {
 	defer file.Close()
 
 	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
+	encoder.SetIndent("", "  ") // Красивое форматирование с отступами
 	return encoder.Encode(data)
 }
 
-// Simple XML structure for demonstration
+// XMLData — простая структура для демонстрации работы с XML
 type XMLData struct {
 	XMLName xml.Name `xml:"root"`
 	Content string   `xml:"content"`
 }
 
+// ReadXML читает и десериализует XML файл
 func ReadXML(path string) (*XMLData, error) {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -78,6 +81,7 @@ func ReadXML(path string) (*XMLData, error) {
 	return &data, err
 }
 
+// WriteXML сериализует данные и записывает в XML файл
 func WriteXML(path string, data *XMLData) error {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -94,6 +98,6 @@ func WriteXML(path string, data *XMLData) error {
 	defer file.Close()
 
 	encoder := xml.NewEncoder(file)
-	encoder.Indent("", "  ")
+	encoder.Indent("", "  ") // Красивое форматирование с отступами
 	return encoder.Encode(data)
 }

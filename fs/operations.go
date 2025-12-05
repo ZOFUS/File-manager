@@ -1,29 +1,39 @@
 package fs
 
 import (
+	"errors"
 	"io"
 	"os"
 	"sync"
 )
 
-// FileMutex protects access to files to prevent race conditions within the app
+// fileMutex защищает доступ к файлам для предотвращения состояния гонки (race condition)
 var fileMutex sync.RWMutex
 
+// DiskInfo содержит информацию о диске/разделе
+type DiskInfo struct {
+	Name        string  // название/путь
+	TotalSize   uint64  // общий объём в байтах
+	FreeSpace   uint64  // свободное место в байтах
+	UsedSpace   uint64  // использовано в байтах
+	UsedPercent float64 // процент использования
+}
+
+// ListDrives возвращает список доступных дисков/точек монтирования
 func ListDrives() []string {
-	// In Docker/Linux, drives are mounts. We can just show root info or specific mounts.
-	// For simplicity, we just return "/"
+	// В Docker/Linux диски представлены как точки монтирования
+	// Для простоты возвращаем корневой раздел "/"
 	return []string{"/"}
 }
 
+// ListDirectory возвращает список файлов и папок в указанной директории
 func ListDirectory(path string) ([]os.FileInfo, error) {
-
 	safePath, err := ResolvePath(path)
 	if err != nil {
 		return nil, err
 	}
 
 	entries, err := os.ReadDir(safePath)
-
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +48,20 @@ func ListDirectory(path string) ([]os.FileInfo, error) {
 	return infos, nil
 }
 
+// CreateDirectory создаёт директорию (включая все родительские)
+func CreateDirectory(path string) error {
+	safePath, err := ResolvePath(path)
+	if err != nil {
+		return err
+	}
+
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+
+	return os.MkdirAll(safePath, 0755)
+}
+
+// ReadFile читает содержимое текстового файла
 func ReadFile(path string) (string, error) {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -54,7 +78,13 @@ func ReadFile(path string) (string, error) {
 	return string(content), nil
 }
 
+// WriteFile записывает содержимое в файл
 func WriteFile(path string, content string) error {
+	// Проверка максимального размера файла (защита от переполнения)
+	if len(content) > MaxFileSize {
+		return errors.New("размер файла превышает максимально допустимый (10 MB)")
+	}
+
 	safePath, err := ResolvePath(path)
 	if err != nil {
 		return err
@@ -66,6 +96,7 @@ func WriteFile(path string, content string) error {
 	return os.WriteFile(safePath, []byte(content), 0644)
 }
 
+// DeleteFile удаляет файл
 func DeleteFile(path string) error {
 	safePath, err := ResolvePath(path)
 	if err != nil {
@@ -78,6 +109,7 @@ func DeleteFile(path string) error {
 	return os.Remove(safePath)
 }
 
+// CopyFile копирует файл из src в dst
 func CopyFile(src, dst string) error {
 	safeSrc, err := ResolvePath(src)
 	if err != nil {
@@ -86,6 +118,15 @@ func CopyFile(src, dst string) error {
 	safeDst, err := ResolvePath(dst)
 	if err != nil {
 		return err
+	}
+
+	// Проверка размера исходного файла
+	srcInfo, err := os.Stat(safeSrc)
+	if err != nil {
+		return err
+	}
+	if srcInfo.Size() > int64(MaxFileSize) {
+		return errors.New("размер исходного файла превышает максимально допустимый (10 MB)")
 	}
 
 	fileMutex.RLock()
@@ -108,6 +149,7 @@ func CopyFile(src, dst string) error {
 	return err
 }
 
+// MoveFile перемещает (переименовывает) файл из src в dst
 func MoveFile(src, dst string) error {
 	safeSrc, err := ResolvePath(src)
 	if err != nil {
