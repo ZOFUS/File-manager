@@ -160,25 +160,21 @@ git clone <repository-url>
 cd secure-fm
 ```
 
-2. **Запустить через Docker Compose**
+2. **Запустить базу данных в фоновом режиме**
 ```bash
-docker-compose up --build
+docker-compose up -d db
 ```
 
-3. **Подключиться к контейнеру**
-```bash
-docker exec -it secure-fm-app ./secure-fm
-```
-
-Или в одну команду:
-```bash
-docker-compose up --build -d
-docker exec -it secure-fm-app ./secure-fm
-```
-
-Затем запустить менеджер отдельно командой:
+3. **Запустить приложение в интерактивном режиме**
 ```bash
 docker-compose run --rm app
+```
+
+> ⚠️ **Важно:** Для корректной работы рекомендуется использовать **английские символы** для имен пользователей и файлов (из-за особенностей кодировки Windows → Docker).
+
+### Альтернативный способ (пересборка + запуск)
+```bash
+docker-compose up --build -d && docker-compose run --rm app
 ```
 
 ### Переменные окружения
