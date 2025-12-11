@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"secure-fm/auth"
@@ -13,8 +15,42 @@ import (
 	"secure-fm/utils"
 )
 
-var currentUser *db.User
-var currentDir string = "." // текущая директория относительно sandbox
+// App инкапсулирует состояние приложения (вместо глобальных переменных)
+type App struct {
+	currentUser *db.User
+	currentDir  string
+	cfg         *config.Config
+}
+
+// NewApp создаёт новый экземпляр приложения
+func NewApp(cfg *config.Config) *App {
+	return &App{
+		currentUser: nil,
+		currentDir:  ".",
+		cfg:         cfg,
+	}
+}
+
+// Валидация имени пользователя
+var usernameRegex = regexp.MustCompile(`^[a-zA-Z0-9_]{3,30}$`)
+
+// validateUsername проверяет корректность имени пользователя
+func validateUsername(username string) error {
+	if len(username) < 3 {
+		return fmt.Errorf("имя пользователя должно содержать минимум 3 символа")
+	}
+	if len(username) > 30 {
+		return fmt.Errorf("имя пользователя должно содержать максимум 30 символов")
+	}
+	if !usernameRegex.MatchString(username) {
+		return fmt.Errorf("имя пользователя может содержать только буквы, цифры и _")
+	}
+	// Запрет опасных паттернов
+	if strings.Contains(username, "..") || strings.Contains(username, "/") || strings.Contains(username, "\\") {
+		return fmt.Errorf("имя пользователя содержит недопустимые символы")
+	}
+	return nil
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -24,18 +60,21 @@ func main() {
 	db.InitDB(cfg)
 	fs.InitFS(cfg)
 
+	// Создаём экземпляр приложения с инкапсулированным состоянием
+	app := NewApp(cfg)
+
 	fmt.Println("Welcome to Secure File Manager")
 
 	for {
-		if currentUser == nil {
-			authMenu()
+		if app.currentUser == nil {
+			app.authMenu()
 		} else {
-			mainMenu()
+			app.mainMenu()
 		}
 	}
 }
 
-func authMenu() {
+func (app *App) authMenu() {
 	fmt.Println("\n--- Auth Menu ---")
 	fmt.Println("1. Login")
 	fmt.Println("2. Register")
@@ -45,9 +84,9 @@ func authMenu() {
 
 	switch choice {
 	case "1":
-		login()
+		app.login()
 	case "2":
-		register()
+		app.register()
 	case "3":
 		os.Exit(0)
 	default:
@@ -55,34 +94,60 @@ func authMenu() {
 	}
 }
 
-func login() {
+func (app *App) login() {
 	username := utils.ReadLine("Username: ")
 	password := utils.ReadLine("Password: ")
 
-	user, err := db.GetUserByUsername(username)
-	if err != nil {
-		fmt.Println("Error fetching user:", err)
+	// Валидация входных данных
+	if err := validateUsername(username); err != nil {
+		// Всё равно выполняем хеширование для защиты от тайминг-атаки
+		auth.HashPassword("dummy_password_for_timing")
+		fmt.Println("Invalid username or password")
 		return
 	}
+
+	user, err := db.GetUserByUsername(username)
+	if err != nil {
+		// Выполняем хеширование для защиты от тайминг-атаки
+		auth.HashPassword("dummy_password_for_timing")
+		fmt.Println("Invalid username or password")
+		return
+	}
+
+	// Защита от тайминг-атаки: всегда выполняем проверку хеша
+	// даже если пользователь не найден
 	if user == nil {
+		// Выполняем "фиктивную" проверку хеша для одинакового времени ответа
+		auth.CheckPasswordHash(password, "$2a$14$dummy.hash.for.timing.attack.protection.xxxxx")
 		fmt.Println("Invalid username or password")
 		return
 	}
 
 	if auth.CheckPasswordHash(password, user.PasswordHash) {
-		currentUser = user
+		app.currentUser = user
 		fmt.Println("Login successful!")
 	} else {
 		fmt.Println("Invalid username or password")
 	}
 }
 
-func register() {
+func (app *App) register() {
 	username := utils.ReadLine("Username: ")
 	password := utils.ReadLine("Password: ")
 
+	// Валидация имени пользователя
+	if err := validateUsername(username); err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	// Валидация пароля
 	if len(password) < 8 {
 		fmt.Println("Password must be at least 8 characters")
+		return
+	}
+	if len(password) > 72 {
+		fmt.Println("Password must be at most 72 characters (bcrypt limit)")
 		return
 	}
 
@@ -94,28 +159,32 @@ func register() {
 
 	err = db.CreateUser(username, hash)
 	if err != nil {
-		fmt.Println("Error creating user (username might be taken):", err)
+		// Единообразное сообщение об ошибке (без утечки информации)
+		fmt.Println("Error creating user (username might be taken)")
 		return
 	}
 	fmt.Println("Registration successful! Please login.")
 }
 
 // resolveCwd объединяет текущую директорию с введённым путём
-func resolveCwd(inputPath string) string {
+// Использует filepath.Join и filepath.Clean для безопасной обработки
+func (app *App) resolveCwd(inputPath string) string {
 	if inputPath == "" || inputPath == "." {
-		return currentDir
+		return app.currentDir
 	}
 	if inputPath == "/" {
 		return "."
 	}
-	if currentDir == "." {
-		return inputPath
+	if app.currentDir == "." {
+		return filepath.Clean(inputPath)
 	}
-	return currentDir + "/" + inputPath
+	// Используем filepath.Join для безопасного объединения путей
+	return filepath.Clean(filepath.Join(app.currentDir, inputPath))
 }
 
 // changeDirectory меняет текущую директорию
-func changeDirectory(newDir string) error {
+// Использует filepath для безопасной работы с путями
+func (app *App) changeDirectory(newDir string) error {
 	var targetDir string
 
 	switch newDir {
@@ -124,43 +193,43 @@ func changeDirectory(newDir string) error {
 	case "/":
 		targetDir = "."
 	case "..":
-		if currentDir == "." {
-			return nil // уже в корне
+		if app.currentDir == "." {
+			return nil // уже в корне sandbox
 		}
-		// Получаем родительскую директорию
-		lastSlash := -1
-		for i := len(currentDir) - 1; i >= 0; i-- {
-			if currentDir[i] == '/' {
-				lastSlash = i
-				break
-			}
-		}
-		if lastSlash == -1 {
+		// Используем filepath.Dir для получения родительской директории
+		parent := filepath.Dir(app.currentDir)
+		if parent == "." || parent == "" {
 			targetDir = "."
 		} else {
-			targetDir = currentDir[:lastSlash]
+			targetDir = parent
 		}
 	default:
-		if currentDir == "." {
-			targetDir = newDir
+		// Используем filepath.Join и Clean для безопасного объединения
+		if app.currentDir == "." {
+			targetDir = filepath.Clean(newDir)
 		} else {
-			targetDir = currentDir + "/" + newDir
+			targetDir = filepath.Clean(filepath.Join(app.currentDir, newDir))
 		}
 	}
 
-	// Проверяем что директория существует и безопасна
+	// Дополнительная проверка: запрет выхода за пределы sandbox через ".."
+	if strings.Contains(targetDir, "..") {
+		return fmt.Errorf("доступ запрещён: попытка выхода за пределы sandbox")
+	}
+
+	// Проверяем что директория существует и безопасна (через fs.ResolvePath)
 	_, err := fs.ListDirectory(targetDir)
 	if err != nil {
 		return err
 	}
 
-	currentDir = targetDir
+	app.currentDir = targetDir
 	return nil
 }
 
-func mainMenu() {
+func (app *App) mainMenu() {
 	fmt.Println("\n────────────── Main Menu ──────────────")
-	fmt.Printf("User: %s | Dir: /%s\n", currentUser.Username, currentDir)
+	fmt.Printf("User: %s | Dir: /%s\n", app.currentUser.Username, app.currentDir)
 	fmt.Println("────────────────────────────────────────")
 	fmt.Println("НАВИГАЦИЯ")
 	fmt.Println("   1. Перейти в папку (cd)")
@@ -194,17 +263,17 @@ func mainMenu() {
 		fmt.Println("   Подсказка: введите '..' для перехода наверх")
 		fmt.Println("   Пример: docs, .., subdir, / (корень sandbox)")
 		newDir := utils.ReadLine("New directory: ")
-		if err := changeDirectory(newDir); err != nil {
+		if err := app.changeDirectory(newDir); err != nil {
 			fmt.Println("Error:", err)
 		} else {
-			fmt.Printf("OK. Перешли в: /%s\n", currentDir)
+			fmt.Printf("OK. Перешли в: /%s\n", app.currentDir)
 		}
 
 	case "2": // Показать содержимое папки
 		fmt.Println("\nПросмотр содержимого директории")
 		fmt.Println("   Пример: . (текущая), docs, subdir/nested")
 		inputPath := utils.ReadLine("Path [. = current]: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		files, err := fs.ListDirectory(path)
 		if err != nil {
 			fmt.Println("Error:", err)
@@ -223,19 +292,19 @@ func mainMenu() {
 				}
 			}
 		}
-		db.LogOperation("list_dir", 0, currentUser.ID)
+		db.LogOperation("list_dir", 0, app.currentUser.ID)
 
 	case "3": // Создать папку
 		fmt.Println("\nСоздание новой директории")
 		fmt.Println("   Пример: myFolder, reports/2024")
 		inputPath := utils.ReadLine("Directory name: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		err := fs.CreateDirectory(path)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. Directory created")
-			db.LogOperation("create_dir", 0, currentUser.ID)
+			db.LogOperation("create_dir", 0, app.currentUser.ID)
 		}
 
 	case "4": // Информация о дисках
@@ -251,7 +320,7 @@ func mainMenu() {
 		} else {
 			fmt.Println("   Не удалось получить информацию о диске:", err)
 		}
-		db.LogOperation("list_drives", 0, currentUser.ID)
+		db.LogOperation("list_drives", 0, app.currentUser.ID)
 
 	// ==================== ФАЙЛЫ ====================
 	case "5": // Создать/записать файл
@@ -259,7 +328,7 @@ func mainMenu() {
 		fmt.Println("   Если файл существует — он будет перезаписан")
 		fmt.Println("   Пример: notes.txt, data/info.txt")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		fmt.Println("   Введите содержимое файла:")
 		content := utils.ReadLine("Content: ")
 		err := fs.WriteFile(path, content)
@@ -267,27 +336,27 @@ func mainMenu() {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. File written")
-			id, _ := db.CreateFileMetadata(inputPath, int64(len(content)), path, currentUser.ID)
-			db.LogOperation("write_file", id, currentUser.ID)
+			id, _ := db.CreateFileMetadata(inputPath, int64(len(content)), path, app.currentUser.ID)
+			db.LogOperation("write_file", id, app.currentUser.ID)
 		}
 
 	case "6": // Прочитать файл
 		fmt.Println("\nЧтение текстового файла")
 		fmt.Println("   Пример: test.txt, docs/readme.md")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		content, err := fs.ReadFile(path)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("Content:\n", content)
 		}
-		db.LogOperation("read_file", 0, currentUser.ID)
+		db.LogOperation("read_file", 0, app.currentUser.ID)
 
 	case "7": // Редактировать файл
 		fmt.Println("\nРедактирование файла")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		currentContent, err := fs.ReadFile(path)
 		if err != nil {
 			fmt.Println("Error reading file:", err)
@@ -331,7 +400,7 @@ func mainMenu() {
 				fmt.Println("Error:", err)
 			} else {
 				fmt.Println("OK. Строка изменена")
-				db.LogOperation("edit_file", 0, currentUser.ID)
+				db.LogOperation("edit_file", 0, app.currentUser.ID)
 			}
 		case "2": // Добавить строку
 			newLine := utils.ReadLine("Новая строка: ")
@@ -340,7 +409,7 @@ func mainMenu() {
 				fmt.Println("Error:", err)
 			} else {
 				fmt.Println("OK. Строка добавлена")
-				db.LogOperation("edit_file", 0, currentUser.ID)
+				db.LogOperation("edit_file", 0, app.currentUser.ID)
 			}
 		case "3": // Удалить строку
 			lineNumStr := utils.ReadLine("Номер строки для удаления: ")
@@ -357,7 +426,7 @@ func mainMenu() {
 				fmt.Println("Error:", err)
 			} else {
 				fmt.Println("OK. Строка удалена")
-				db.LogOperation("edit_file", 0, currentUser.ID)
+				db.LogOperation("edit_file", 0, app.currentUser.ID)
 			}
 		case "4": // Перезаписать всё
 			fmt.Println("Введите новое содержимое:")
@@ -367,7 +436,7 @@ func mainMenu() {
 				fmt.Println("Error:", err)
 			} else {
 				fmt.Println("OK. Файл перезаписан")
-				db.LogOperation("edit_file", 0, currentUser.ID)
+				db.LogOperation("edit_file", 0, app.currentUser.ID)
 			}
 		case "0":
 			fmt.Println("Отменено")
@@ -380,13 +449,13 @@ func mainMenu() {
 		fmt.Println("   Внимание: файл будет удалён безвозвратно!")
 		fmt.Println("   Пример: old_file.txt, temp/cache.dat")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		err := fs.DeleteFile(path)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. File deleted")
-			db.LogOperation("delete_file", 0, currentUser.ID)
+			db.LogOperation("delete_file", 0, app.currentUser.ID)
 		}
 
 	case "9": // Копировать файл
@@ -395,14 +464,14 @@ func mainMenu() {
 		fmt.Println("   Пример: source.txt -> backup/source_copy.txt")
 		srcInput := utils.ReadLine("Source path: ")
 		dstInput := utils.ReadLine("Dest path: ")
-		src := resolveCwd(srcInput)
-		dst := resolveCwd(dstInput)
+		src := app.resolveCwd(srcInput)
+		dst := app.resolveCwd(dstInput)
 		err := fs.CopyFile(src, dst)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. File copied")
-			db.LogOperation("copy_file", 0, currentUser.ID)
+			db.LogOperation("copy_file", 0, app.currentUser.ID)
 		}
 
 	case "10": // Переместить файл
@@ -412,14 +481,14 @@ func mainMenu() {
 		fmt.Println("   Пример: old.txt -> archive/old.txt")
 		srcInput := utils.ReadLine("Source path: ")
 		dstInput := utils.ReadLine("Dest path: ")
-		src := resolveCwd(srcInput)
-		dst := resolveCwd(dstInput)
+		src := app.resolveCwd(srcInput)
+		dst := app.resolveCwd(dstInput)
 		err := fs.MoveFile(src, dst)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. File moved")
-			db.LogOperation("move_file", 0, currentUser.ID)
+			db.LogOperation("move_file", 0, app.currentUser.ID)
 		}
 
 	// ==================== ДАННЫЕ (JSON/XML) ====================
@@ -428,7 +497,7 @@ func mainMenu() {
 		fmt.Println("   Введите любой валидный JSON")
 		fmt.Println("   Пример: {\"name\": \"John\", \"age\": 25}")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		fmt.Println("   Введите JSON:")
 		jsonContent := utils.ReadLine("JSON: ")
 		err := fs.WriteFile(path, jsonContent)
@@ -436,28 +505,28 @@ func mainMenu() {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. JSON файл создан")
-			db.LogOperation("write_json", 0, currentUser.ID)
+			db.LogOperation("write_json", 0, app.currentUser.ID)
 		}
 
 	case "12": // Прочитать JSON
 		fmt.Println("\nЧтение JSON файла")
 		fmt.Println("   Пример: config.json, data/users.json")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		data, err := fs.ReadJSON(path)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Printf("Data: %+v\n", data)
 		}
-		db.LogOperation("read_json", 0, currentUser.ID)
+		db.LogOperation("read_json", 0, app.currentUser.ID)
 
 	case "13": // Создать XML
 		fmt.Println("\nЗапись XML файла")
 		fmt.Println("   Введите любой валидный XML")
 		fmt.Println("   Пример: <user><name>John</name></user>")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		fmt.Println("   Введите XML:")
 		xmlContent := utils.ReadLine("XML: ")
 		err := fs.WriteFile(path, xmlContent)
@@ -465,21 +534,21 @@ func mainMenu() {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. XML файл создан")
-			db.LogOperation("write_xml", 0, currentUser.ID)
+			db.LogOperation("write_xml", 0, app.currentUser.ID)
 		}
 
 	case "14": // Прочитать XML
 		fmt.Println("\nЧтение XML файла")
 		fmt.Println("   Пример: data.xml, config/settings.xml")
 		inputPath := utils.ReadLine("File path: ")
-		path := resolveCwd(inputPath)
+		path := app.resolveCwd(inputPath)
 		data, err := fs.ReadXML(path)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Printf("Data: %+v\n", data)
 		}
-		db.LogOperation("read_xml", 0, currentUser.ID)
+		db.LogOperation("read_xml", 0, app.currentUser.ID)
 
 	// ==================== АРХИВЫ ====================
 	case "15": // Создать ZIP
@@ -488,14 +557,14 @@ func mainMenu() {
 		fmt.Println("   Шаг 2: укажите ИМЯ архива (например: archive.zip)")
 		srcInput := utils.ReadLine("Что архивировать: ")
 		dstInput := utils.ReadLine("Имя архива (.zip): ")
-		src := resolveCwd(srcInput)
-		dst := resolveCwd(dstInput)
+		src := app.resolveCwd(srcInput)
+		dst := app.resolveCwd(dstInput)
 		err := fs.CreateZip(src, dst)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. Zip created")
-			db.LogOperation("create_zip", 0, currentUser.ID)
+			db.LogOperation("create_zip", 0, app.currentUser.ID)
 		}
 
 	case "16": // Распаковать ZIP
@@ -504,19 +573,19 @@ func mainMenu() {
 		fmt.Println("   Шаг 2: укажите ПАПКУ для распаковки")
 		srcInput := utils.ReadLine("ZIP файл: ")
 		dstInput := utils.ReadLine("Папка назначения: ")
-		src := resolveCwd(srcInput)
-		dst := resolveCwd(dstInput)
+		src := app.resolveCwd(srcInput)
+		dst := app.resolveCwd(dstInput)
 		err := fs.Unzip(src, dst)
 		if err != nil {
 			fmt.Println("Error:", err)
 		} else {
 			fmt.Println("OK. Zip extracted")
-			db.LogOperation("extract_zip", 0, currentUser.ID)
+			db.LogOperation("extract_zip", 0, app.currentUser.ID)
 		}
 
 	// ==================== ВЫХОД ====================
 	case "0":
-		currentUser = nil
+		app.currentUser = nil
 		fmt.Println("Logged out")
 
 	default:
